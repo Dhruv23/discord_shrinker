@@ -1,8 +1,3 @@
-# shrink_all.sh
-
-Save this file as `shrink_all.sh` next to `shrink.py`.
-
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -13,6 +8,9 @@ PY_SCRIPT="${SCRIPT_DIR}/shrink.py"
 # Log folder
 LOG_DIR="${SCRIPT_DIR}/shrink_logs"
 mkdir -p "${LOG_DIR}"
+
+# Limit concurrency
+MAX_JOBS=5
 
 # Video extensions (common FFmpeg inputs)
 # Add more if you want.
@@ -30,6 +28,7 @@ unset 'FIND_EXPR[-1]' # remove trailing -o
 
 echo "Searching recursively under: ${SCRIPT_DIR}"
 echo "Logging to: ${LOG_DIR}"
+echo "Max concurrent jobs: ${MAX_JOBS}"
 echo
 
 # Track PIDs so you can monitor/kill them easily
@@ -46,6 +45,11 @@ find "${SCRIPT_DIR}" -type f \( "${FIND_EXPR[@]}" \) -print0 | while IFS= read -
     continue
   fi
 
+  # Wait until fewer than MAX_JOBS are running
+  while [ "$(jobs -r | wc -l)" -ge "$MAX_JOBS" ]; do
+    sleep 1
+  done
+
   # Log filename safe-ish
   safe="${base//[^A-Za-z0-9._-]/_}"
   log="${LOG_DIR}/${safe}.log"
@@ -59,7 +63,10 @@ find "${SCRIPT_DIR}" -type f \( "${FIND_EXPR[@]}" \) -print0 | while IFS= read -
   echo "$pid  $file" >> "${PID_FILE}"
 done
 
+# Wait for the last batch to finish
+wait
+
 echo
-echo "All jobs launched in background."
+echo "All jobs completed."
 echo "PID list: ${PID_FILE}"
 echo "Logs: ${LOG_DIR}/*.log"
