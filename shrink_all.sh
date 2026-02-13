@@ -71,7 +71,7 @@ while IFS= read -r -d '' file; do
   echo "---- $(date) ----" >>"$log"
 
   # Sequential run (no &). If it fails, continue to next file but log the failure.
-  if "${PYTHON_BIN}" "${PY_SCRIPT}" "$file" >>"$log" 2>&1; then
+  if "${PYTHON_BIN}" -u "${PY_SCRIPT}" "$file" 2>&1 | tee -a "$log"; then
     echo "Done: $file"
   else
     rc=$?
