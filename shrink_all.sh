@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- config ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY_SCRIPT="${SCRIPT_DIR}/shrink.py"
 
 LOG_DIR="${SCRIPT_DIR}/shrink_logs"
 mkdir -p "${LOG_DIR}"
 
-MAX_JOBS=3
+# One job at a time (sequential)
+MAX_JOBS=1
 
 EXTS=(
   mp4 mov avi mkv wmv flv webm m4v mpg mpeg 3gp 3g2
   ts mts m2ts vob ogv rm rmvb asf divx
 )
 
+# Build find expression WITHOUT needing to trim trailing -o (macOS bash 3.2 safe)
 FIND_EXPR=()
 for ext in "${EXTS[@]}"; do
-  FIND_EXPR+=(-iname "*.${ext}" -o)
+  if ((${#FIND_EXPR[@]})); then
+    FIND_EXPR+=(-o)
+  fi
+  FIND_EXPR+=(-iname "*.${ext}")
 done
-unset 'FIND_EXPR[-1]'
 
 echo "Searching recursively under: ${SCRIPT_DIR}"
 echo "Logging to: ${LOG_DIR}"
@@ -28,49 +33,55 @@ echo
 PID_FILE="${LOG_DIR}/pids.txt"
 : > "${PID_FILE}"
 
-pids=()
+# Optional: prefer python3 if available, else python
+PYTHON_BIN="python"
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+fi
+
+# Helper to create a safe log filename (portable)
+safe_name() {
+  # Replace anything not in this set with underscore
+  # Works in bash 3.2+ (no extglob needed)
+  local s="$1"
+  s="${s//[^A-Za-z0-9._-]/_}"
+  printf '%s' "$s"
+}
 
 while IFS= read -r -d '' file; do
   base="$(basename "$file")"
   dir="$(dirname "$file")"
   name="${base%.*}"
-  ext="${base##*.}"
 
-  # Skip already shrunk outputs
-  if [[ "$base" == *_shrunk.* ]]; then
+  # Skip files that are themselves shrunk outputs or temp outputs
+  if [[ "$base" == *_shrunk.* || "$base" == *_shrunk__*.mp4 ]]; then
     continue
   fi
 
-  # Skip if corresponding _shrunk file already exists
-  shrunk_candidate="${dir}/${name}_shrunk.${ext}"
-  if [[ -f "$shrunk_candidate" ]]; then
+  # Skip if shrunk output already exists (shrink.py default output is mp4)
+  if [[ -f "${dir}/${name}_shrunk.mp4" ]] || compgen -G "${dir}/${name}_shrunk__*.mp4" > /dev/null; then
     echo "Skipping (already shrunk exists): $file"
     continue
   fi
 
-  # Concurrency control
-  while [ "$(jobs -r | wc -l)" -ge "$MAX_JOBS" ]; do
-    sleep 1
-  done
-
-  safe="${base//[^A-Za-z0-9._-]/_}"
+  safe="$(safe_name "$base")"
   log="${LOG_DIR}/${safe}.log"
 
   echo "Starting: $file"
-  ( python "${PY_SCRIPT}" "$file" ) >"$log" 2>&1 &
+  echo "---- $(date) ----" >>"$log"
 
-  pid=$!
-  pids+=("$pid")
-  echo "$pid  $file" >> "${PID_FILE}"
+  # Sequential run (no &). If it fails, continue to next file but log the failure.
+  if "${PYTHON_BIN}" "${PY_SCRIPT}" "$file" >>"$log" 2>&1; then
+    echo "Done: $file"
+  else
+    rc=$?
+    echo "FAILED (exit ${rc}): $file"
+    echo "FAILED (exit ${rc})" >>"$log"
+    # keep going
+  fi
 
 done < <(find "${SCRIPT_DIR}" -type f \( "${FIND_EXPR[@]}" \) -print0)
 
-# Wait for all jobs
-for pid in "${pids[@]}"; do
-  wait "$pid" || true
-done
-
 echo
-echo "All jobs completed."
-echo "PID list: ${PID_FILE}"
+echo "All jobs completed (sequential)."
 echo "Logs: ${LOG_DIR}/*.log"
