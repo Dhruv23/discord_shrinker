@@ -10,10 +10,9 @@ LOG_DIR="${SCRIPT_DIR}/shrink_logs"
 mkdir -p "${LOG_DIR}"
 
 # Limit concurrency
-MAX_JOBS=5
+MAX_JOBS=3
 
 # Video extensions (common FFmpeg inputs)
-# Add more if you want.
 EXTS=(
   mp4 mov avi mkv wmv flv webm m4v mpg mpeg 3gp 3g2
   ts mts m2ts vob ogv rm rmvb asf divx
@@ -35,13 +34,17 @@ echo
 PID_FILE="${LOG_DIR}/pids.txt"
 : > "${PID_FILE}"
 
-# Find videos, skip ones already shrunk (ends with _shrunk.<ext>), run in background
-# Note: Works in WSL and Git Bash. In Git Bash, Python is usually "python".
-find "${SCRIPT_DIR}" -type f \( "${FIND_EXPR[@]}" \) -print0 | while IFS= read -r -d '' file; do
+# Store PIDs of launched python processes so we can wait reliably
+pids=()
+
+# Use process substitution instead of a pipe so we DON'T run the while-loop in a subshell.
+while IFS= read -r -d '' file; do
   base="$(basename "$file")"
 
-  # Skip already-shrunk outputs like something_shrunk.mp4
-  if [[ "$base" == *_shrunk.* ]]; then
+  # Skip already-processed outputs and intermediates created by shrink.py
+  # - final outputs:   *_shrunk.<ext>
+  # - temp outputs:    *_shrunk__*.mp4  (and similar)
+  if [[ "$base" == *_shrunk.* || "$base" == *_shrunk__*.mp4 ]]; then
     continue
   fi
 
@@ -60,11 +63,14 @@ find "${SCRIPT_DIR}" -type f \( "${FIND_EXPR[@]}" \) -print0 | while IFS= read -
   ( python "${PY_SCRIPT}" "$file" ) >"$log" 2>&1 &
 
   pid=$!
+  pids+=("$pid")
   echo "$pid  $file" >> "${PID_FILE}"
-done
+done < <(find "${SCRIPT_DIR}" -type f \( "${FIND_EXPR[@]}" \) -print0)
 
-# Wait for the last batch to finish
-wait
+# Wait for all launched Python processes (reliable because pids[] exists in this shell)
+for pid in "${pids[@]}"; do
+  wait "$pid" || true
+done
 
 echo
 echo "All jobs completed."

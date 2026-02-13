@@ -51,13 +51,14 @@ def build_vf(scale_width=None, fps=None):
     if fps is not None:
         filters.append(f"fps={fps}")
     if scale_width is not None:
+        # Keep aspect ratio; -2 forces even height
         filters.append(f"scale={scale_width}:-2")
     return ",".join(filters) if filters else None
 
 
 def cleanup_pass_files_everywhere(folder: Path):
-    # One-line “nuke leftovers” approach, but written readably:
-    for pat in ("*.log*", "*.mbtree"):
+    # Clean up any ffmpeg 2-pass artifacts that might remain
+    for pat in ("*.log*", "*.mbtree", "*.passlog*"):
         for f in folder.glob(pat):
             try:
                 f.unlink()
@@ -66,7 +67,13 @@ def cleanup_pass_files_everywhere(folder: Path):
 
 
 def cleanup_passlog_set(passlog_base: str):
-    # Remove all files starting with passlog_base filename (ffmpeg creates variants)
+    """
+    Remove files created by -passlogfile.
+    ffmpeg may create multiple files with suffixes, e.g.:
+      <passlog>-0.log
+      <passlog>-0.log.mbtree
+    We remove everything that starts with the base name.
+    """
     base = Path(passlog_base).name
     folder = Path(passlog_base).parent
     for f in folder.glob(base + "*"):
@@ -82,14 +89,24 @@ def compute_target_kbps(duration_s: float, audio_kbps: int) -> tuple[int, int]:
     total_bps = total_bits / max(duration_s, 0.1)
 
     audio_bps = audio_kbps * 1000
-    video_bps = max(int(total_bps - audio_bps), 80_000)  # avoid absurdly low
+    # Avoid absurdly low video bitrate; if too long, quality will degrade regardless.
+    video_bps = max(int(total_bps - audio_bps), 80_000)
+
     return int(video_bps / 1000), int(audio_kbps)
 
 
-def encode_2pass(infile: Path, outfile: Path, duration_s: float,
-                 codec: str, preset: str,
-                 audio_kbps: int, fps=None, scale_width=None,
-                 legacy_rate_control: bool = False) -> str:
+def encode_2pass(
+    infile: Path,
+    outfile: Path,
+    duration_s: float,
+    codec: str,
+    preset: str,
+    audio_kbps: int,
+    fps=None,
+    scale_width=None,
+    legacy_rate_control: bool = False,
+    threads: int = 4,
+) -> str:
     """
     2-pass encode to target size.
     If legacy_rate_control=True, adds maxrate/bufsize (old script style).
@@ -98,23 +115,31 @@ def encode_2pass(infile: Path, outfile: Path, duration_s: float,
     v_k, a_k = compute_target_kbps(duration_s, audio_kbps)
     passlog = str(outfile) + ".passlog"
     vf = build_vf(scale_width=scale_width, fps=fps)
+
+    # Windows null sink for pass 1
     null_sink = "NUL" if os.name == "nt" else "/dev/null"
 
     # PASS 1
     cmd1 = ["ffmpeg", "-y", "-i", str(infile)]
     if vf:
         cmd1 += ["-vf", vf]
-    cmd1 += ["-c:v", codec, "-preset", preset, "-b:v", f"{v_k}k"]
+
+    cmd1 += [
+        "-c:v", codec,
+        "-preset", preset,
+        "-b:v", f"{v_k}k",
+        "-threads", str(threads),
+    ]
 
     if legacy_rate_control:
-        cmd1 += ["-maxrate", f"{int(v_k*1.2)}k", "-bufsize", f"{int(v_k*2)}k"]
+        cmd1 += ["-maxrate", f"{int(v_k * 1.2)}k", "-bufsize", f"{int(v_k * 2)}k"]
 
     cmd1 += [
         "-pass", "1",
         "-passlogfile", passlog,
         "-an",
         "-f", "mp4",
-        null_sink
+        null_sink,  # output MUST be last
     ]
     run(cmd1)
 
@@ -122,10 +147,16 @@ def encode_2pass(infile: Path, outfile: Path, duration_s: float,
     cmd2 = ["ffmpeg", "-y", "-i", str(infile)]
     if vf:
         cmd2 += ["-vf", vf]
-    cmd2 += ["-c:v", codec, "-preset", preset, "-b:v", f"{v_k}k"]
+
+    cmd2 += [
+        "-c:v", codec,
+        "-preset", preset,
+        "-b:v", f"{v_k}k",
+        "-threads", str(threads),
+    ]
 
     if legacy_rate_control:
-        cmd2 += ["-maxrate", f"{int(v_k*1.2)}k", "-bufsize", f"{int(v_k*2)}k"]
+        cmd2 += ["-maxrate", f"{int(v_k * 1.2)}k", "-bufsize", f"{int(v_k * 2)}k"]
 
     cmd2 += [
         "-pass", "2",
@@ -133,20 +164,30 @@ def encode_2pass(infile: Path, outfile: Path, duration_s: float,
         "-c:a", "aac",
         "-b:a", f"{a_k}k",
         "-movflags", "+faststart",
-        str(outfile)
     ]
 
-    # HEVC tag in MP4 for compatibility
+    # HEVC tag in MP4 for compatibility (helps some Apple/QuickTime players)
     if codec == "libx265":
         cmd2 += ["-tag:v", "hvc1"]
 
+    cmd2 += [str(outfile)]  # output MUST be last
     run(cmd2)
+
     return passlog
 
 
-def attempt_encode(infile: Path, outfile: Path, duration_s: float,
-                   codec: str, preset: str, audio_kbps: int,
-                   fps=None, scale_width=None, legacy_rate_control: bool = False) -> Path | None:
+def attempt_encode(
+    infile: Path,
+    outfile: Path,
+    duration_s: float,
+    codec: str,
+    preset: str,
+    audio_kbps: int,
+    fps=None,
+    scale_width=None,
+    legacy_rate_control: bool = False,
+    threads: int = 4,
+) -> Path | None:
     tmp_out = outfile.with_name(
         outfile.stem
         + f"__{codec}_fps{fps or 'src'}_a{audio_kbps}"
@@ -157,10 +198,16 @@ def attempt_encode(infile: Path, outfile: Path, duration_s: float,
     passlog = None
     try:
         passlog = encode_2pass(
-            infile, tmp_out, duration_s,
-            codec=codec, preset=preset,
-            audio_kbps=audio_kbps, fps=fps, scale_width=scale_width,
-            legacy_rate_control=legacy_rate_control
+            infile=infile,
+            outfile=tmp_out,
+            duration_s=duration_s,
+            codec=codec,
+            preset=preset,
+            audio_kbps=audio_kbps,
+            fps=fps,
+            scale_width=scale_width,
+            legacy_rate_control=legacy_rate_control,
+            threads=threads,
         )
     finally:
         if passlog:
@@ -175,24 +222,34 @@ def attempt_encode(infile: Path, outfile: Path, duration_s: float,
     return None
 
 
-def new_strategy(infile: Path, outfile: Path, duration_s: float) -> Path | None:
+def new_strategy(infile: Path, outfile: Path, duration_s: float, threads: int = 4) -> Path | None:
     # Try HEVC + fps/audio tweaks without scaling first
     for codec, preset, fps, audio_kbps in NEW_ATTEMPTS_PRE_SCALE:
         try:
-            out = attempt_encode(infile, outfile, duration_s, codec, preset, audio_kbps, fps=fps, scale_width=None)
+            out = attempt_encode(
+                infile, outfile, duration_s,
+                codec, preset, audio_kbps,
+                fps=fps, scale_width=None,
+                legacy_rate_control=False,
+                threads=threads,
+            )
             if out:
                 return out
         except RuntimeError:
-            # If x265 fails on user's ffmpeg build, we’ll just continue;
-            # legacy fallback will likely succeed with x264.
+            # If x265 fails on user's ffmpeg build, continue; legacy fallback likely succeeds with x264.
             continue
 
     # Final fallback in "new strategy": scale, but keep the better efficiency settings
-    # (try HEVC 30fps/64k audio with scale steps)
     codec, preset, fps, audio_kbps = ("libx265", "medium", 30, 64)
     for w in DOWNSCALE_WIDTHS:
         try:
-            out = attempt_encode(infile, outfile, duration_s, codec, preset, audio_kbps, fps=fps, scale_width=w)
+            out = attempt_encode(
+                infile, outfile, duration_s,
+                codec, preset, audio_kbps,
+                fps=fps, scale_width=w,
+                legacy_rate_control=False,
+                threads=threads,
+            )
             if out:
                 return out
         except RuntimeError:
@@ -201,9 +258,8 @@ def new_strategy(infile: Path, outfile: Path, duration_s: float) -> Path | None:
     return None
 
 
-def legacy_strategy(infile: Path, outfile: Path, duration_s: float) -> Path | None:
-    # Old behavior: H.264 2-pass, and scale steps; include maxrate/bufsize like old script
-    # Audio default 96k (like original), and no fps changes
+def legacy_strategy(infile: Path, outfile: Path, duration_s: float, threads: int = 4) -> Path | None:
+    # Old behavior: H.264 2-pass + scale steps; include maxrate/bufsize like the old script
     codec, preset, audio_kbps = ("libx264", "medium", 96)
 
     for w in LEGACY_DOWNSCALE_STEPS:
@@ -211,9 +267,9 @@ def legacy_strategy(infile: Path, outfile: Path, duration_s: float) -> Path | No
             out = attempt_encode(
                 infile, outfile, duration_s,
                 codec, preset, audio_kbps,
-                fps=None,
-                scale_width=w,
-                legacy_rate_control=True
+                fps=None, scale_width=w,
+                legacy_rate_control=True,
+                threads=threads,
             )
             if out:
                 return out
@@ -224,9 +280,12 @@ def legacy_strategy(infile: Path, outfile: Path, duration_s: float) -> Path | No
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Shrink a video to <= 9.5MB with quality-preserving attempts + legacy fallback.")
+    ap = argparse.ArgumentParser(
+        description="Shrink a video to <= 9.5MB with quality-preserving attempts + legacy fallback."
+    )
     ap.add_argument("input", help="Input video path")
     ap.add_argument("-o", "--output", help="Output path (default: <input>_shrunk.mp4)")
+    ap.add_argument("--threads", type=int, default=4, help="FFmpeg threads per encode job (default: 4)")
     args = ap.parse_args()
 
     infile = Path(args.input).resolve()
@@ -244,18 +303,16 @@ def main():
     duration_s = get_duration_seconds(infile)
     print(f"Duration: {duration_s:.2f}s | Target: <= {TARGET_MB} MB")
 
-    temp_files = []
-
     # --- Try new strategy first ---
     print("\n== Trying quality-preserving strategy (HEVC + FPS/audio before scaling) ==")
-    out = new_strategy(infile, outfile, duration_s)
+    out = new_strategy(infile, outfile, duration_s, threads=args.threads)
 
     # --- If new strategy fails, use legacy approach ---
     if out is None:
         print("\n== New strategy failed. Falling back to legacy strategy (H.264 + scaling) ==")
-        out = legacy_strategy(infile, outfile, duration_s)
+        out = legacy_strategy(infile, outfile, duration_s, threads=args.threads)
 
-    # Cleanup any temp mp4s we created except the winner
+    # Cleanup temp mp4s except the winner
     for f in workdir.glob(outfile.stem + "__*.mp4"):
         if out is None or f != out:
             try:
