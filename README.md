@@ -1,342 +1,186 @@
-# 🎥 shrink.py
+## Updated README (for the new “don’t drop resolution first” behavior) + batch Bash script
 
-**Automatically shrink any video to ≤ 9.5MB on Windows**
+Below are two things:
 
----
-
-## 📌 What This Program Does
-
-`shrink.py` compresses any video file so that the final output is **9.5MB or smaller**.
-
-It does this by:
-
-* Calculating the correct bitrate based on video duration
-* Using **2-pass H.264 encoding** for accurate file size targeting
-* Automatically lowering resolution if needed
-* Keeping audio intact (configurable bitrate)
-* Ensuring the final file fits under the 9.5MB limit
-
-This is useful for:
-
-* Discord upload limits
-* Email attachment limits
-* LMS submissions
-* Forms that require <10MB files
+1. An updated `README.md` you can paste into your repo
+2. A `shrink_all.sh` script that **recursively finds videos that are NOT already shrunk** and runs `shrink.py` on all of them **in the background**
 
 ---
 
-# 🖥️ System Requirements
+# README.md
 
-* Windows 10 or 11
-* Python 3.8+
-* FFmpeg (must be installed and added to PATH)
+````md
+# 🎥 shrink.py — Shrink videos to ≤ 9.5 MB (Windows-friendly)
+
+This tool re-encodes videos to fit under **9.5 MB**, while trying to preserve visual quality and resolution as much as possible.
+
+## What it does
+
+Given an input video, `shrink.py` will:
+
+1. Prefer **H.265/HEVC (libx265)** for better quality-per-byte than H.264.
+2. If the file is still too large, it will **reduce FPS before reducing resolution**.
+3. If still too large, it will **lower audio bitrate**.
+4. **Only as a final fallback**, it will reduce resolution.
+
+It produces an output file under **9.5 MB**, and cleans up temporary/intermediate files and ffmpeg 2-pass log files.
 
 ---
 
-# 🔧 Installation Instructions (Step-By-Step)
+## Requirements
+
+- Windows 10/11
+- Python 3.8+
+- FFmpeg installed and available in PATH (must include `ffmpeg` and `ffprobe`)
 
 ---
 
-## ✅ Step 1 — Install Python
+## Install prerequisites
 
-1. Go to:
-
-   ```
+### 1) Install Python
+1. Download from:
    https://www.python.org/downloads/
-   ```
-2. Download the latest Python version.
-3. **IMPORTANT:** During installation:
+2. During install, check:
+   ✅ **Add Python to PATH**
+3. Verify in Command Prompt:
+   ```bash
+   python --version
+````
 
-   * ✅ Check **“Add Python to PATH”**
-4. Finish installation.
+### 2) Install FFmpeg (Required)
 
-Verify it worked:
+1. Download FFmpeg builds (Windows):
+   [https://www.gyan.dev/ffmpeg/builds/](https://www.gyan.dev/ffmpeg/builds/)
 
-Open Command Prompt and run:
+   * Download: **ffmpeg-release-essentials.zip**
+2. Extract it somewhere permanent, e.g.:
+   `C:\ffmpeg`
+3. Add FFmpeg `bin` to PATH:
+   `C:\ffmpeg\bin`
 
-```bash
-python --version
-```
-
-You should see something like:
-
-```
-Python 3.12.1
-```
-
----
-
-## ✅ Step 2 — Install FFmpeg (Required)
-
-This script depends on FFmpeg to encode video.
-
-### 1️⃣ Download FFmpeg
-
-Go to:
-
-```
-https://www.gyan.dev/ffmpeg/builds/
-```
-
-Download:
-
-> **ffmpeg-release-essentials.zip**
-
----
-
-### 2️⃣ Extract FFmpeg
-
-1. Extract the ZIP file.
-2. Move the extracted folder somewhere permanent, for example:
-
-```
-C:\ffmpeg
-```
-
-Inside that folder you should see:
-
-```
-C:\ffmpeg\bin\ffmpeg.exe
-C:\ffmpeg\bin\ffprobe.exe
-```
-
----
-
-### 3️⃣ Add FFmpeg to PATH
-
-1. Press **Windows Key**
-
-2. Search for:
-
-   ```
-   Environment Variables
-   ```
-
-3. Click:
-
-   > Edit the system environment variables
-
-4. Click:
-
-   > Environment Variables
-
-5. Under **System variables**, select:
-
-   ```
-   Path
-   ```
-
-6. Click **Edit**
-
-7. Click **New**
-
-8. Add:
-
-   ```
-   C:\ffmpeg\bin
-   ```
-
-9. Click OK on everything.
-
----
-
-### 4️⃣ Verify FFmpeg Works
-
-Open a **new Command Prompt** and run:
+Verify in a NEW Command Prompt:
 
 ```bash
 ffmpeg -version
+ffprobe -version
 ```
 
-If installed correctly, it will print FFmpeg version info.
-
-If it says “not recognized”, restart your computer and try again.
-
 ---
 
-# 📂 Installing shrink.py
+## Running shrink.py
 
-1. Create a folder anywhere (example):
-
-   ```
-   C:\VideoShrinker
-   ```
-
-2. Save the file as:
-
-   ```
-   shrink.py
-   ```
-
-   inside that folder.
-
----
-
-# ▶️ How To Run The Program
-
-Open Command Prompt.
-
-Navigate to the folder:
+From the folder containing `shrink.py`:
 
 ```bash
-cd C:\VideoShrinker
+python shrink.py input_video.mp4
 ```
 
-Run:
+Output will be created in the same folder:
+
+* `input_video_shrunk.mp4`
+
+### Optional: choose output name
 
 ```bash
-python shrink.py yourvideo.mp4
+python shrink.py input_video.mp4 -o output.mp4
 ```
 
 ---
 
-# 📤 Output
+## Notes on quality
 
-The script creates:
+A 9.5 MB limit is strict. What’s possible depends mostly on **duration**.
 
-```
-yourvideo_shrunk.mp4
-```
+To preserve resolution, the script tries:
 
-in the same directory.
+* HEVC first (more efficient than H.264)
+* FPS reduction (less noticeable than downscaling)
+* Audio reduction
+* Resolution reduction as last resort
 
-It guarantees:
-
-```
-≤ 9.5MB
-```
+If your clip is very long (e.g. several minutes), you may still need to trim it for good quality.
 
 ---
 
-# ⚙️ Optional Arguments
+## Batch shrinking (recursive) with shrink_all.sh
 
-### Specify Output Name
+This repo includes `shrink_all.sh`, which:
+
+* Recursively searches the current folder and subfolders for video files
+* Skips any file that already ends with `_shrunk.<ext>`
+* Runs `shrink.py` on each remaining video
+* Runs jobs **in the background** and writes logs to `shrink_logs/`
+
+### Supported environments
+
+Because `.sh` scripts are Unix shell scripts, run it using one of:
+
+* **WSL (Windows Subsystem for Linux)**
+* **Git Bash** (installed with Git for Windows)
+
+### How to run it (WSL or Git Bash)
+
+1. Make it executable (WSL / Git Bash):
 
 ```bash
-python shrink.py input.mp4 -o output.mp4
+chmod +x shrink_all.sh
 ```
 
----
-
-### Lower Audio Bitrate (For Very Long Videos)
-
-If the video is long and won’t fit:
+2. Run it from your project folder:
 
 ```bash
-python shrink.py input.mp4 --audio-kbps 64
+./shrink_all.sh
 ```
 
-Lower audio bitrate = more room for video quality.
+It will start background jobs immediately and return you to the prompt.
 
----
+### Logs
 
-# 🧠 How It Works (Technical Explanation)
+It creates:
 
-The script:
+* `shrink_logs/`
+* One log file per input video, plus a `pids.txt` file
 
-1. Uses `ffprobe` to detect video duration.
-2. Calculates the exact total bitrate required to hit 9.5MB.
-3. Reserves part of bitrate for audio.
-4. Uses **2-pass x264 encoding** for accurate size targeting.
-5. If file is still too large:
-
-   * Automatically downscales resolution (1280 → 960 → 854 → 640).
-6. Stops once file is under 9.5MB.
-
----
-
-# 📊 Quality Expectations
-
-| Video Length | Expected Quality            |
-| ------------ | --------------------------- |
-| 15–30 sec    | Very good                   |
-| 1 min        | Good                        |
-| 2–3 min      | Moderate                    |
-| 5+ min       | Low (size limit too strict) |
-
-File size is controlled by bitrate.
-Longer videos must sacrifice quality to stay under 9.5MB.
-
----
-
-# ❗ Troubleshooting
-
----
-
-### ❌ “ffmpeg not recognized”
-
-Fix:
-
-* Make sure `C:\ffmpeg\bin` is in PATH
-* Restart Command Prompt
-* Restart computer if needed
-
----
-
-### ❌ Output still larger than 9.5MB
-
-Try:
+To check progress:
 
 ```bash
-python shrink.py input.mp4 --audio-kbps 64
+tail -f shrink_logs/*.log
 ```
 
-Or trim the video shorter.
-
----
-
-### ❌ Very blurry output
-
-That means the video is too long for 9.5MB.
-
-Remember:
-
-> File size depends on duration × bitrate.
-
----
-
-# 🔒 Safety Notes
-
-* This script **does not modify your original file**.
-* It creates a new compressed copy.
-* Works with most common formats:
-
-  * .mp4
-  * .mov
-  * .avi
-  * .mkv
-  * etc.
-
----
-
-# 📁 Example Folder Layout
-
-```
-C:\VideoShrinker
-│
-├── shrink.py
-├── input.mp4
-└── input_shrunk.mp4
-```
-
----
-
-# 🎯 Example Full Usage
+To list running jobs (WSL):
 
 ```bash
-cd C:\VideoShrinker
-python shrink.py presentation.mov -o submission.mp4 --audio-kbps 64
+ps aux | grep shrink.py
 ```
 
 ---
 
-# 🚀 Done
+## Troubleshooting
 
-You now have a Windows-compatible video compressor that:
+### “ffmpeg not recognized”
 
-* Automatically calculates bitrate
-* Uses professional 2-pass encoding
-* Ensures file size ≤ 9.5MB
-* Works from Command Prompt
+FFmpeg isn’t in PATH. Add `C:\ffmpeg\bin` to PATH and reopen your terminal.
+
+### Still looks bad
+
+The clip may be too long to look good under 9.5 MB. Consider trimming, or accept the final fallback (resolution downscale).
+
+
+
+
+## Quick note (so it works in WSL smoothly)
+
+If you run this in **WSL**, your Python command might be `python3` instead of `python`.
+If `python` fails in WSL, change this line in `shrink_all.sh`:
+
+```bash
+( python "${PY_SCRIPT}" "$file" ) >"$log" 2>&1 &
+```
+
+to:
+
+```bash
+( python3 "${PY_SCRIPT}" "$file" ) >"$log" 2>&1 &
+```
 
 ---
