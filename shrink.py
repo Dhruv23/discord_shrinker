@@ -324,7 +324,7 @@ def main():
     cleanup_pass_files_everywhere(workdir)
 
     if out is None:
-        print("\n❌ Could not compress under 9.5MB. Try trimming the clip shorter.")
+        print("\nCould not compress under 9.5MB. Try trimming the clip shorter.")
         sys.exit(2)
 
     # Move winning temp output into final outfile name
@@ -335,7 +335,7 @@ def main():
         pass
 
     out.replace(outfile)
-    print(f"\n✅ Success: {outfile} ({outfile.stat().st_size / (1024 * 1024):.2f} MB)")
+    print(f"\nSuccess: {outfile} ({outfile.stat().st_size / (1024 * 1024):.2f} MB)")
 
 
 if __name__ == "__main__":
