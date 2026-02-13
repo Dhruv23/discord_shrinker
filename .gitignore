@@ -1,0 +1,63 @@
+# ==============================
+# Ignore all video files
+# ==============================
+
+# Common formats
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.mpg
+*.mpeg
+*.3gp
+*.3g2
+*.ts
+*.mts
+*.m2ts
+*.vob
+*.ogv
+*.rm
+*.rmvb
+*.asf
+*.divx
+
+# Case-insensitive safety (Windows sometimes preserves caps)
+*.MP4
+*.MOV
+*.AVI
+*.MKV
+*.WMV
+*.FLV
+*.WEBM
+*.M4V
+*.MPG
+*.MPEG
+*.TS
+*.MTS
+*.M2TS
+*.VOB
+*.OGV
+
+# Optional: ignore generated pass logs from ffmpeg
+*.log
+*.mbtree
+*.passlog*
+
+# Optional: ignore output files from shrink.py
+*_shrunk.mp4
+*_w*.mp4
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.env/
+
+# Windows junk
+Thumbs.db
