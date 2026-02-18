@@ -279,38 +279,36 @@ def legacy_strategy(infile: Path, outfile: Path, duration_s: float, threads: int
     return None
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description="Shrink a video to <= 9.5MB with quality-preserving attempts + legacy fallback."
-    )
-    ap.add_argument("input", help="Input video path")
-    ap.add_argument("-o", "--output", help="Output path (default: <input>_shrunk.mp4)")
-    ap.add_argument("--threads", type=int, default=4, help="FFmpeg threads per encode job (default: 4)")
-    args = ap.parse_args()
-
-    infile = Path(args.input).resolve()
+def process_video(input_path: str, output_path: str = None, threads: int = 4) -> str:
+    """
+    Main logic to process a single video file.
+    Returns the path to the successful output file.
+    Raises RuntimeError or FileNotFoundError on failure.
+    """
+    infile = Path(input_path).resolve()
     if not infile.exists():
-        print(f"Input not found: {infile}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Input not found: {infile}")
 
     if not ffmpeg_exists():
-        print("Error: ffmpeg/ffprobe not found. Install FFmpeg and add it to PATH.")
-        sys.exit(1)
+        raise RuntimeError("ffmpeg/ffprobe not found. Install FFmpeg and add it to PATH.")
 
-    outfile = Path(args.output).resolve() if args.output else infile.with_name(infile.stem + "_shrunk.mp4")
+    outfile = Path(output_path).resolve() if output_path else infile.with_name(infile.stem + "_shrunk.mp4")
     workdir = outfile.parent
+
+    # Ensure workdir exists (if output_path was provided in a non-existent dir)
+    workdir.mkdir(parents=True, exist_ok=True)
 
     duration_s = get_duration_seconds(infile)
     print(f"Duration: {duration_s:.2f}s | Target: <= {TARGET_MB} MB")
 
     # --- Try new strategy first ---
     print("\n== Trying quality-preserving strategy (HEVC + FPS/audio before scaling) ==")
-    out = new_strategy(infile, outfile, duration_s, threads=args.threads)
+    out = new_strategy(infile, outfile, duration_s, threads=threads)
 
     # --- If new strategy fails, use legacy approach ---
     if out is None:
         print("\n== New strategy failed. Falling back to legacy strategy (H.264 + scaling) ==")
-        out = legacy_strategy(infile, outfile, duration_s, threads=args.threads)
+        out = legacy_strategy(infile, outfile, duration_s, threads=threads)
 
     # Cleanup temp mp4s except the winner
     for f in workdir.glob(outfile.stem + "__*.mp4"):
@@ -324,8 +322,7 @@ def main():
     cleanup_pass_files_everywhere(workdir)
 
     if out is None:
-        print("\nCould not compress under 9.5MB. Try trimming the clip shorter.")
-        sys.exit(2)
+        raise RuntimeError("Could not compress under 9.5MB. Try trimming the clip shorter.")
 
     # Move winning temp output into final outfile name
     try:
@@ -336,6 +333,23 @@ def main():
 
     out.replace(outfile)
     print(f"\nSuccess: {outfile} ({outfile.stat().st_size / (1024 * 1024):.2f} MB)")
+    return str(outfile)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Shrink a video to <= 9.5MB with quality-preserving attempts + legacy fallback."
+    )
+    ap.add_argument("input", help="Input video path")
+    ap.add_argument("-o", "--output", help="Output path (default: <input>_shrunk.mp4)")
+    ap.add_argument("--threads", type=int, default=4, help="FFmpeg threads per encode job (default: 4)")
+    args = ap.parse_args()
+
+    try:
+        process_video(args.input, args.output, args.threads)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1 if "ffmpeg" in str(e) else 2)
 
 
 if __name__ == "__main__":
